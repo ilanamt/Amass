@@ -5,26 +5,29 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 
+	"github.com/caffix/netmap"
 	migrate "github.com/rubenv/sql-migrate"
 )
 
 // Database contains values required for managing databases.
 type Database struct {
-	Primary         bool   `ini:"primary"`
-	System          string `ini:"system"`
-	URL             string `ini:"url"`
-	Host            string `ini:"host"`
-	Port            string `ini:"port"`
-	Username        string `ini:"username"`
-	Password        string `ini:"password"`
-	DBName          string `ini:"database"`
-	SSLMode         string `ini:"sslmode"`
-	MigrationsPath  string `ini:"migrations_path"`
-	MigrationsTable string `ini:"migrations_table"`
-	Options         string `ini:"options"`
+	Primary         bool          `ini:"primary"`
+	System          string        `ini:"system"`
+	URL             string        `ini:"url"`
+	Host            string        `ini:"host"`
+	Port            string        `ini:"port"`
+	Graph           *netmap.Graph `ini:"graph"`
+	Username        string        `ini:"username"`
+	Password        string        `ini:"password"`
+	DBName          string        `ini:"database"`
+	SSLMode         string        `ini:"sslmode"`
+	MigrationsPath  string        `ini:"migrations_path"`
+	MigrationsTable string        `ini:"migrations_table"`
+	Options         string        `ini:"options"`
 }
 
 func (d Database) String() string {
@@ -38,7 +41,7 @@ func (d Database) String() string {
 	return s
 }
 
-type Store interface {
+type SQLStore interface {
 	getAppliedMigrationsCount() (int, error)
 	getMigrationsSource() *migrate.FileMigrationSource
 	getSqlConnection() (*sql.DB, error)
@@ -50,7 +53,18 @@ type Store interface {
 	RunMigrations() error
 }
 
-// GetDatabaseManager returns the database manager for the specified database.
+type Store interface {
+	UpsertFQDN(context.Context, string, string, int64) (int64, error)
+	UpsertCNAME(context.Context, string, string, string, int64) error
+	UpsertPTR(context.Context, string, string, string, int64) error
+	UpsertSRV(context.Context, string, string, string, string, int64) error
+	UpsertNS(context.Context, string, string, string, int64) error
+	UpsertMX(context.Context, string, string, string, int64) error
+	UpsertInfrastructure(context.Context, int, string, string, string, string, int64) error
+	UpsertA(context.Context, string, string, string, int64) error
+	UpsertAAAA(context.Context, string, string, string, int64) error
+}
+
 func GetDatabaseManager(db *Database) Store {
 	var mgr Store
 
@@ -58,6 +72,11 @@ func GetDatabaseManager(db *Database) Store {
 	case "postgres":
 		if mgr == nil || mgr.(*Postgres).db != db {
 			mgr = &Postgres{db: db}
+		}
+		return mgr
+	case "cayley":
+		if mgr == nil || mgr.(*Cayley).db != db || mgr.(*Cayley).graph != db.Graph {
+			mgr = &Cayley{db: db, graph: db.Graph}
 		}
 		return mgr
 	default:
@@ -68,4 +87,6 @@ func GetDatabaseManager(db *Database) Store {
 		}
 		return mgr
 	}
+
+	return nil
 }
