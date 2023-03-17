@@ -36,14 +36,16 @@ to store JSON as a data type,
 which help to achieve scalability
 and flexibility in data storage.
 
-The model consists of three main tables:
-enum_executions, assets, and relations.
+The model consists of four tables:
+`executions`, `execution_logs`, `assets`, and `relations`.
 
 ![Database model](../images/amass_database_model.png)
 
-- `enum_executions`: stores all executions of enumerations, all discoveries are associated to an enumeration and allows to compare enumerations.
+- `executions`: references a single Amass scan run. All discoveries are associated to at least one execution through `execution_logs`.
+- `execution_logs`: used to store further context
+   on how an asset was found.
 - `assets`: stores the discoveries made by Amass. Each asset would be a node in the graph representation and contains information about the type of discovery and its content. Postgres allow to store the content in JSON format.
-- `relations`: stores the relationships between the discoveries made in the Assets table. It also stores the type of relationship and allows for joins to be performed for SQL queries.
+- `relations`: stores the relationships between the discoveries made during a scan process.
 
 The current asset types in the Amass database model are:
 

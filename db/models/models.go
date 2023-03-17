@@ -7,18 +7,29 @@ import (
 	"gorm.io/datatypes"
 )
 
-type EnumExecution struct {
-	ID        int64     `gorm:"primaryKey;autoIncrement:true"`
-	CreatedAt time.Time `gorm:"default:CURRENT_TIMESTAMP()"`
+type Execution struct {
+	ID            int64 `gorm:"primaryKey;autoIncrement:true"`
+	Domains       string
+	CreatedAt     time.Time `gorm:"default:CURRENT_TIMESTAMP()"`
+	ExecutionLogs []ExecutionLog
+	Assets        []Asset `gorm:"many2many:execution_logs;"`
+}
+
+type ExecutionLog struct {
+	ID          int64 `gorm:"primaryKey;autoIncrement:true"`
+	ExecutionID int64
+	Execution   Execution
+	AssetID     int64
+	Asset       Asset
+	CreatedAt   time.Time `gorm:"default:CURRENT_TIMESTAMP()"`
 }
 
 type Asset struct {
-	ID              int64     `gorm:"primaryKey;autoIncrement:true"`
-	CreatedAt       time.Time `gorm:"default:CURRENT_TIMESTAMP()"`
-	EnumExecutionID int64
-	EnumExecution   EnumExecution
-	Type            string
-	Content         datatypes.JSON
+	ID            int64     `gorm:"primaryKey;autoIncrement:true"`
+	CreatedAt     time.Time `gorm:"default:CURRENT_TIMESTAMP()"`
+	ExecutionLogs []ExecutionLog
+	Type          string
+	Content       datatypes.JSON
 }
 
 type Relation struct {

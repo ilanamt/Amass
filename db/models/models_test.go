@@ -46,14 +46,16 @@ func TestMain(m *testing.M) {
 	os.Exit(exitVal)
 }
 
-func TestCreateEnumExecution(t *testing.T) {
-	in_enum := EnumExecution{}
+func TestCreateExecution(t *testing.T) {
+	in_enum := Execution{
+		Domains: "example.com",
+	}
 	result := db.Create(&in_enum)
 	if result.Error != nil {
 		t.Errorf("Error creating enum: %v\n", result.Error)
 	}
 
-	var enum EnumExecution
+	var enum Execution
 	db.Last(&enum)
 
 	if enum.ID != in_enum.ID {
@@ -68,7 +70,9 @@ func TestCreateEnumExecution(t *testing.T) {
 		t.Errorf("Enum created at is zero: %v\n", enum.CreatedAt)
 	}
 
-	enum2 := EnumExecution{}
+	enum2 := Execution{
+		Domains: "foo.bar",
+	}
 	result2 := db.Create(&enum2)
 	if result2.Error != nil {
 		t.Errorf("Error creating enum: %v\n", result2.Error)
@@ -83,11 +87,14 @@ func TestCreateEnumExecution(t *testing.T) {
 	}
 }
 
-func TestCreateFQDNAsset(t *testing.T) {
-	enum := EnumExecution{}
-	enum_result := db.Create(&enum)
-	if enum_result.Error != nil {
-		t.Errorf("Error creating enum: %v\n", enum_result.Error)
+func TestCreateExecutionLog(t *testing.T) {
+	// Create an Execution
+	in_enum := Execution{
+		Domains: "example.com",
+	}
+	result := db.Create(&in_enum)
+	if result.Error != nil {
+		t.Errorf("Error creating execution: %v\n", result.Error)
 	}
 
 	fqdn := FQDN{
@@ -100,9 +107,137 @@ func TestCreateFQDNAsset(t *testing.T) {
 	}
 
 	in_asset := Asset{
-		EnumExecutionID: enum.ID,
-		Type:            "FQDN",
-		Content:         datatypes.JSON(fqdn_content)}
+		Type:    "FQDN",
+		Content: datatypes.JSON(fqdn_content)}
+
+	result = db.Create(&in_asset)
+	if result.Error != nil {
+		t.Errorf("Error creating FQDN asset: %v\n", result.Error)
+	}
+
+	// Create an ExecutionLog referencing the Execution and Asset
+	in_el := ExecutionLog{
+		ExecutionID: in_enum.ID,
+		AssetID:     in_asset.ID}
+
+	result = db.Create(&in_el)
+	if result.Error != nil {
+		t.Errorf("Error creating execution log: %v\n", result.Error)
+	}
+
+	var el ExecutionLog
+	db.Last(&el)
+
+	if el.ID != in_el.ID {
+		t.Errorf("ExecutionLog ID is not equal to inserted ID: %v, %v\n", el.ID, in_el.ID)
+	}
+
+	if el.ExecutionID != in_el.ExecutionID {
+		t.Errorf("ExecutionLog ExecutionID is not equal to inserted ExecutionID: %v, %v\n", el.ExecutionID, in_el.ExecutionID)
+	}
+
+	if el.AssetID != in_el.AssetID {
+		t.Errorf("ExecutionLog AssetID is not equal to inserted AssetID: %v, %v\n", el.AssetID, in_el.AssetID)
+	}
+
+	if result.RowsAffected != 1 {
+		t.Errorf("Rows affected is not 1: %v\n", result.RowsAffected)
+	}
+
+	if el.CreatedAt.IsZero() {
+		t.Errorf("ExecutionLog created at is zero: %v\n", el.CreatedAt)
+	}
+
+	// Create another asset
+	fqdn2 := FQDN{
+		Name: "foo.bar",
+		Tld:  "bar"}
+
+	fqdn2_content, err := json.Marshal(fqdn2)
+	if err != nil {
+		t.Errorf("Error marshalling FQDN: %v\n", err)
+	}
+
+	in_asset2 := Asset{
+		Type:    "FQDN",
+		Content: datatypes.JSON(fqdn2_content)}
+
+	result = db.Create(&in_asset2)
+	if result.Error != nil {
+		t.Errorf("Error creating FQDN asset 2: %v\n", result.Error)
+	}
+
+	// Create an ExecutionLog referencing the Execution and Asset
+	in_el2 := ExecutionLog{
+		ExecutionID: in_enum.ID,
+		AssetID:     in_asset2.ID}
+
+	result = db.Create(&in_el2)
+	if result.Error != nil {
+		t.Errorf("Error creating execution log: %v\n", result.Error)
+	}
+
+	// Fetch the created asset and test that it can get the related execution logs
+	var asset Asset
+	db.First(&asset)
+	var execution_logs []ExecutionLog
+	err = db.Model(&asset).Association("ExecutionLogs").Find(&execution_logs)
+	if err != nil {
+		t.Errorf("Error fetching execution logs: %v\n", err)
+	}
+
+	if len(execution_logs) != 1 {
+		t.Errorf("Execution Logs length is not 1: %v\n", len(execution_logs))
+	}
+
+	// Fetch the discovered assets during an Execution
+	// Produces SELECT "assets"."id","assets"."created_at","assets"."type","assets"."content"
+	// FROM "assets" JOIN "execution_logs" ON "execution_logs"."asset_id" = "assets"."id"
+	//   AND "execution_logs"."execution_id" = 3
+	var execution Execution
+	db.Last(&execution)
+	var assets []Asset
+	err = db.Model(&execution).Association("Assets").Find(&assets)
+	if err != nil {
+		t.Errorf("Error fetching assets from an given execution: %v\n", err)
+	}
+
+	if len(assets) != 2 {
+		t.Errorf("Assets length is not 2: %v\n", len(assets))
+	}
+
+	// Fetch all the assets found during an Execution through the ExecutionLog
+	// Produces SELECT * FROM "assets" WHERE "assets"."id" IN (1,2)
+	var execution_logs2 []ExecutionLog
+	err = db.Model(&execution).Association("ExecutionLogs").Find(&execution_logs2)
+	if err != nil {
+		t.Errorf("Error fetching execution logs from an given execution: %v\n", err)
+	}
+
+	err = db.Model(&execution_logs2).Association("Asset").Find(&assets)
+	if err != nil {
+		t.Errorf("Error fetching assets from different execution logs: %v\n", err)
+	}
+
+	if len(assets) != 2 {
+		t.Errorf("Assets length is not 2: %v\n", len(assets))
+	}
+
+}
+
+func TestCreateFQDNAsset(t *testing.T) {
+	fqdn := FQDN{
+		Name: "example.com",
+		Tld:  "com"}
+
+	fqdn_content, err := json.Marshal(fqdn)
+	if err != nil {
+		t.Errorf("Error marshalling FQDN: %v\n", err)
+	}
+
+	in_asset := Asset{
+		Type:    "FQDN",
+		Content: datatypes.JSON(fqdn_content)}
 
 	result := db.Create(&in_asset)
 	if result.Error != nil {
@@ -124,10 +259,6 @@ func TestCreateFQDNAsset(t *testing.T) {
 		t.Errorf("Asset created at is zero: %v\n", asset.CreatedAt)
 	}
 
-	if asset.EnumExecutionID != in_asset.EnumExecutionID {
-		t.Errorf("Asset enum execution ID is not equal to inserted enum execution ID: %v, %v\n", asset.EnumExecutionID, in_asset.EnumExecutionID)
-	}
-
 	if asset.Type != in_asset.Type {
 		t.Errorf("Asset type is not equal to inserted type: %v, %v\n", asset.Type, in_asset.Type)
 	}
@@ -145,12 +276,6 @@ func TestCreateFQDNAsset(t *testing.T) {
 }
 
 func TestCreateIPAsset(t *testing.T) {
-	enum := EnumExecution{}
-	enum_result := db.Create(&enum)
-	if enum_result.Error != nil {
-		t.Errorf("Error creating enum: %v\n", enum_result.Error)
-	}
-
 	ip := IPAddress{
 		Address: net.IP([]byte{127, 0, 0, 1}),
 		Type:    "v4"}
@@ -161,9 +286,8 @@ func TestCreateIPAsset(t *testing.T) {
 	}
 
 	in_asset := Asset{
-		EnumExecutionID: enum.ID,
-		Type:            "IP",
-		Content:         datatypes.JSON(ip_content)}
+		Type:    "IP",
+		Content: datatypes.JSON(ip_content)}
 
 	result := db.Create(&in_asset)
 	if result.Error != nil {
@@ -183,10 +307,6 @@ func TestCreateIPAsset(t *testing.T) {
 
 	if asset.CreatedAt.IsZero() {
 		t.Errorf("Asset created at is zero: %v\n", asset.CreatedAt)
-	}
-
-	if asset.EnumExecutionID != in_asset.EnumExecutionID {
-		t.Errorf("Asset enum execution ID is not equal to inserted enum execution ID: %v, %v\n", asset.EnumExecutionID, in_asset.EnumExecutionID)
 	}
 
 	if asset.Type != in_asset.Type {
@@ -211,12 +331,6 @@ func TestCreateIPAsset(t *testing.T) {
 }
 
 func TestCreateASAsset(t *testing.T) {
-	enum := EnumExecution{}
-	enum_result := db.Create(&enum)
-	if enum_result.Error != nil {
-		t.Errorf("Error creating enum: %v\n", enum_result.Error)
-	}
-
 	as := AutonomousSystem{
 		Number: 1234}
 
@@ -226,9 +340,8 @@ func TestCreateASAsset(t *testing.T) {
 	}
 
 	in_asset := Asset{
-		EnumExecutionID: enum.ID,
-		Type:            "AS",
-		Content:         datatypes.JSON(as_content)}
+		Type:    "AS",
+		Content: datatypes.JSON(as_content)}
 
 	result := db.Create(&in_asset)
 	if result.Error != nil {
@@ -248,10 +361,6 @@ func TestCreateASAsset(t *testing.T) {
 
 	if asset.CreatedAt.IsZero() {
 		t.Errorf("Asset created at is zero: %v\n", asset.CreatedAt)
-	}
-
-	if asset.EnumExecutionID != in_asset.EnumExecutionID {
-		t.Errorf("Asset enum execution ID is not equal to inserted enum execution ID: %v, %v\n", asset.EnumExecutionID, in_asset.EnumExecutionID)
 	}
 
 	if asset.Type != in_asset.Type {
@@ -270,11 +379,6 @@ func TestCreateASAsset(t *testing.T) {
 }
 
 func TestCreateNetblockAsset(t *testing.T) {
-	enum := EnumExecution{}
-	enum_result := db.Create(&enum)
-	if enum_result.Error != nil {
-		t.Errorf("Error creating enum: %v\n", enum_result.Error)
-	}
 
 	cidr_val := net.IPNet{IP: net.IP([]byte{127, 0, 0, 0}), Mask: net.IPMask([]byte{255, 255, 255, 0})}
 	netblock := Netblock{
@@ -288,9 +392,8 @@ func TestCreateNetblockAsset(t *testing.T) {
 	}
 
 	in_asset := Asset{
-		EnumExecutionID: enum.ID,
-		Type:            "Netblock",
-		Content:         datatypes.JSON(netblock_content)}
+		Type:    "Netblock",
+		Content: datatypes.JSON(netblock_content)}
 
 	result := db.Create(&in_asset)
 	if result.Error != nil {
@@ -310,10 +413,6 @@ func TestCreateNetblockAsset(t *testing.T) {
 
 	if asset.CreatedAt.IsZero() {
 		t.Errorf("Asset created at is zero: %v\n", asset.CreatedAt)
-	}
-
-	if asset.EnumExecutionID != in_asset.EnumExecutionID {
-		t.Errorf("Asset enum execution ID is not equal to inserted enum execution ID: %v, %v\n", asset.EnumExecutionID, in_asset.EnumExecutionID)
 	}
 
 	if asset.Type != in_asset.Type {
@@ -339,12 +438,6 @@ func TestCreateNetblockAsset(t *testing.T) {
 }
 
 func TestCreateRIROrgAsset(t *testing.T) {
-	enum := EnumExecution{}
-	enum_result := db.Create(&enum)
-	if enum_result.Error != nil {
-		t.Errorf("Error creating enum: %v\n", enum_result.Error)
-	}
-
 	riro := RIROrganization{
 		Name:  "RIROrg",
 		RIRId: "RIR-1",
@@ -357,9 +450,8 @@ func TestCreateRIROrgAsset(t *testing.T) {
 	}
 
 	in_asset := Asset{
-		EnumExecutionID: enum.ID,
-		Type:            "RIROrganization",
-		Content:         datatypes.JSON(riro_content)}
+		Type:    "RIROrganization",
+		Content: datatypes.JSON(riro_content)}
 
 	result := db.Create(&in_asset)
 	if result.Error != nil {
@@ -381,10 +473,6 @@ func TestCreateRIROrgAsset(t *testing.T) {
 		t.Errorf("Asset created at is zero: %v\n", asset.CreatedAt)
 	}
 
-	if asset.EnumExecutionID != in_asset.EnumExecutionID {
-		t.Errorf("Asset enum execution ID is not equal to inserted enum execution ID: %v, %v\n", asset.EnumExecutionID, in_asset.EnumExecutionID)
-	}
-
 	if asset.Type != in_asset.Type {
 		t.Errorf("Asset type is not equal to inserted type: %v, %v\n", asset.Type, in_asset.Type)
 	}
@@ -401,12 +489,6 @@ func TestCreateRIROrgAsset(t *testing.T) {
 }
 
 func TestCreateRelation(t *testing.T) {
-	enum := EnumExecution{}
-	enum_result := db.Create(&enum)
-	if enum_result.Error != nil {
-		t.Errorf("Error creating enum: %v\n", enum_result.Error)
-	}
-
 	fqdn := FQDN{
 		Name: "example.com",
 		Tld:  "com"}
@@ -417,9 +499,8 @@ func TestCreateRelation(t *testing.T) {
 	}
 
 	fqdn_asset := Asset{
-		EnumExecutionID: enum.ID,
-		Type:            "FQDN",
-		Content:         datatypes.JSON(fqdn_content)}
+		Type:    "FQDN",
+		Content: datatypes.JSON(fqdn_content)}
 
 	fqdn_result := db.Create(&fqdn_asset)
 	if fqdn_result.Error != nil {
@@ -435,9 +516,8 @@ func TestCreateRelation(t *testing.T) {
 	}
 
 	as_asset := Asset{
-		EnumExecutionID: enum.ID,
-		Type:            "AS",
-		Content:         datatypes.JSON(as_content)}
+		Type:    "AS",
+		Content: datatypes.JSON(as_content)}
 
 	as_result := db.Create(&as_asset)
 	if as_result.Error != nil {
