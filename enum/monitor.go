@@ -16,18 +16,18 @@ const falsePositiveThreshold int = 100
 func (e *Enumeration) checkForMissedWildcards(ip string) {
 	addr := netmap.Node(ip)
 
-	if count, err := e.graph.CountInEdges(e.ctx, addr, "a_record", "aaaa_record"); err != nil || count < falsePositiveThreshold {
+	if count, err := e.db.CountInEdges(e.ctx, addr, "a_record", "aaaa_record"); err != nil || count < falsePositiveThreshold {
 		return
 	}
 
-	edges, err := e.graph.ReadInEdges(e.ctx, addr, "a_record", "aaaa_record")
+	edges, err := e.db.ReadInEdges(e.ctx, addr, "a_record", "aaaa_record")
 	if err != nil {
 		return
 	}
 
 	subsToNodes := make(map[string][]netmap.Node)
 	for _, edge := range edges {
-		name := e.graph.NodeToID(edge.From)
+		name := e.db.GetAssetID(edge.From)
 		if name == "" {
 			continue
 		}
@@ -44,7 +44,7 @@ func (e *Enumeration) checkForMissedWildcards(ip string) {
 
 		e.Config.BlacklistSubdomain(sub)
 		for _, node := range nodes {
-			_ = e.graph.DeleteNode(e.ctx, node)
+			_ = e.db.DeleteAsset(e.ctx, node)
 		}
 	}
 }

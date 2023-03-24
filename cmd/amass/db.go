@@ -264,6 +264,7 @@ func showEventData(args *dbArgs, uuids []string, asninfo bool, db *netmap.Graph)
 
 	tags := make(map[string]int)
 	asns := make(map[int]*format.ASNSummaryData)
+
 	cayleyDB := amassdb.NewCayleyGraph(db)
 	execIDs := make([]int64, len(uuids))
 
@@ -272,6 +273,7 @@ func showEventData(args *dbArgs, uuids []string, asninfo bool, db *netmap.Graph)
 		num, _ := strconv.ParseInt(str, 10, 64)
 		execIDs[i] = num
 	}
+
 	for _, out := range getEventOutput(context.Background(), execIDs, asninfo, cayleyDB, cache) {
 		if len(domains) > 0 && !domainNameInScope(out.Name, domains) {
 			continue

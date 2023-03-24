@@ -162,7 +162,7 @@ func buildNameInfo(ctx context.Context, db amassdb.Store, execID int64, names []
 		}
 
 		n := netmap.Node(name)
-		if srcs, err := db.(*amassdb.Cayley).NodeSources(ctx, n, string(execID)); err == nil && len(srcs) > 0 {
+		if srcs, err := db.(*amassdb.Cayley).NodeSources(ctx, n, execID); err == nil && len(srcs) > 0 {
 			results[name] = &requests.Output{
 				Name:    name,
 				Sources: srcs,
