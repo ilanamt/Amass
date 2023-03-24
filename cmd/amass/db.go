@@ -17,6 +17,7 @@ import (
 
 	"github.com/OWASP/Amass/v3/config"
 	"github.com/OWASP/Amass/v3/datasrcs"
+	amassdb "github.com/OWASP/Amass/v3/db"
 	"github.com/OWASP/Amass/v3/format"
 	"github.com/OWASP/Amass/v3/requests"
 	"github.com/OWASP/Amass/v3/systems"
@@ -263,7 +264,15 @@ func showEventData(args *dbArgs, uuids []string, asninfo bool, db *netmap.Graph)
 
 	tags := make(map[string]int)
 	asns := make(map[int]*format.ASNSummaryData)
-	for _, out := range getEventOutput(context.Background(), uuids, asninfo, db, cache) {
+	cayleyDB := amassdb.NewCayleyGraph(db)
+	execIDs := make([]int64, len(uuids))
+
+	//TODO: make this cleaner, it is a workaround for now
+	for i, str := range uuids {
+		num, _ := strconv.ParseInt(str, 10, 64)
+		execIDs[i] = num
+	}
+	for _, out := range getEventOutput(context.Background(), execIDs, asninfo, cayleyDB, cache) {
 		if len(domains) > 0 && !domainNameInScope(out.Name, domains) {
 			continue
 		}

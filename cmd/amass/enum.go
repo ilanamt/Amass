@@ -25,11 +25,11 @@ import (
 
 	"github.com/OWASP/Amass/v3/config"
 	"github.com/OWASP/Amass/v3/datasrcs"
+	amassdb "github.com/OWASP/Amass/v3/db"
 	"github.com/OWASP/Amass/v3/enum"
 	"github.com/OWASP/Amass/v3/format"
 	"github.com/OWASP/Amass/v3/requests"
 	"github.com/OWASP/Amass/v3/systems"
-	"github.com/caffix/netmap"
 	"github.com/caffix/stringset"
 	"github.com/fatih/color"
 )
@@ -194,9 +194,15 @@ func runEnumCommand(clArgs []string) {
 	initializeSourceTags(sys.DataSources())
 	cfg.SourceFilter.Sources = expandCategoryNames(cfg.SourceFilter.Sources, generateCategoryMap(sys))
 
-	graph := sys.GraphDatabases()[0]
+	database, err := openSQLDatabase(cfg)
+	if err != nil {
+		r.Fprintf(color.Error, "Failed to open database: %v\n", err)
+		os.Exit(1)
+	}
+	dbMgr := amassdb.GetDatabaseManager(database).(amassdb.Store)
+
 	// Setup the new enumeration
-	e := enum.NewEnumeration(cfg, sys, graph)
+	e := enum.NewEnumeration(cfg, sys, dbMgr)
 	if e == nil {
 		r.Fprintf(color.Error, "%s\n", "Failed to setup the enumeration")
 		os.Exit(1)
@@ -237,7 +243,7 @@ func runEnumCommand(clArgs []string) {
 	defer cancel()
 
 	wg.Add(1)
-	go processOutput(ctx, graph, e, outChans, done, &wg)
+	go processOutput(ctx, dbMgr, e, outChans, done, &wg)
 	// Monitor for cancellation by the user
 	go func(d chan struct{}, c context.Context, f context.CancelFunc) {
 		quit := make(chan os.Signal, 1)
@@ -278,7 +284,7 @@ func runEnumCommand(clArgs []string) {
 			fmt.Fprintf(color.Error, "%s%s%s\n",
 				yellow("Discoveries are being migrated into the "), yellow(g.String()), yellow(" database"))
 
-			if err := graph.Migrate(ctx, g); err != nil {
+			if err := dbMgr.(*amassdb.Cayley).Migrate(ctx, g); err != nil {
 				fmt.Fprintf(color.Error, "%s%s%s%s\n",
 					red("The database migration to "), red(g.String()), red(" failed: "), red(err.Error()))
 			}
@@ -522,7 +528,7 @@ func saveJSONOutput(e *enum.Enumeration, args *enumArgs, output chan *requests.O
 	}
 }
 
-func processOutput(ctx context.Context, g *netmap.Graph, e *enum.Enumeration, outputs []chan *requests.Output, done chan struct{}, wg *sync.WaitGroup) {
+func processOutput(ctx context.Context, db amassdb.Store, e *enum.Enumeration, outputs []chan *requests.Output, done chan struct{}, wg *sync.WaitGroup) {
 	defer wg.Done()
 	defer func() {
 		// Signal all the other output goroutines to terminate
@@ -536,7 +542,7 @@ func processOutput(ctx context.Context, g *netmap.Graph, e *enum.Enumeration, ou
 	defer known.Close()
 	// The function that obtains output from the enum and puts it on the channel
 	extract := func(limit int) {
-		for _, o := range ExtractOutput(ctx, g, e, known, true, limit) {
+		for _, o := range ExtractOutput(ctx, db, e, known, true, limit) {
 			if !o.Complete(e.Config.Passive) || !e.Config.IsDomainInScope(o.Name) {
 				continue
 			}

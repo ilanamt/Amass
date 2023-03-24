@@ -13,14 +13,14 @@ import (
 	"net"
 	"strings"
 
+	models "github.com/OWASP/Amass/v3/models"
+	"github.com/caffix/netmap"
 	migrate "github.com/rubenv/sql-migrate"
 	"gorm.io/datatypes"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
-	"github.com/OWASP/Amass/v3/db/models"
-	models "github.com/OWASP/Amass/v3/models"
 	"golang.org/x/net/publicsuffix"
 )
 
@@ -201,15 +201,47 @@ func (p *Postgres) RunMigrations() error {
 	return nil
 }
 
+func (p *Postgres) InsertExecution(domains []string) (int64, error) {
+	db, err := gorm.Open(postgres.Open(p.db.String()), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		return 0, fmt.Errorf("Error connecting to database: %v\n", err)
+	}
+
+	execution := models.Execution{
+		Domains: strings.Join(domains, ", "),
+	}
+
+	result := db.Create(&execution)
+	if result.Error != nil {
+		return 0, fmt.Errorf("Error creating execution: %v\n", result.Error)
+	}
+
+	return execution.ID, nil
+}
+
+func (p *Postgres) insertExecutionLog(db *gorm.DB, assetId int64, execId int64) (int64, error) {
+	exec_log := models.ExecutionLog{
+		ExecutionID: execId,
+		AssetID:     assetId,
+	}
+
+	log_result := db.Create(&exec_log)
+	if log_result.Error != nil {
+		return assetId, fmt.Errorf("Error creating execution log: %v\n", log_result.Error)
+	}
+
+	return assetId, nil
+}
+
 // Create FQDN if it does not exist, otherwise return the ID of the existing FQDN
-func (p *Postgres) UpsertFQDN(ctx context.Context, name string, source string, eventID int64) (int64, error) {
+func (p *Postgres) InsertFQDN(info InsertInfo, fqdn FQDN) (int64, error) {
 	db, err := gorm.Open(postgres.Open(p.db.String()), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {
 		return 0, fmt.Errorf("Could not get sql connection: %s", err)
 	}
 
 	var asset models.Asset
-	err = db.Where("content->>'name' = ?", "example.com").First(&asset).Error
+	err = db.Where("content->>'name' = ?", fqdn.Name).First(&asset).Error
 	if err == nil {
 		return asset.ID, nil
 	}
@@ -217,36 +249,35 @@ func (p *Postgres) UpsertFQDN(ctx context.Context, name string, source string, e
 		return 0, fmt.Errorf("Failed to check if FDQN already exists: %v\n", err)
 	}
 
-	tld, _ := publicsuffix.PublicSuffix(name)
-	domain, err := publicsuffix.EffectiveTLDPlusOne(name)
+	tld, _ := publicsuffix.PublicSuffix(fqdn.Name)
+	domain, err := publicsuffix.EffectiveTLDPlusOne(fqdn.Name)
 	if err != nil {
-		return 0, fmt.Errorf("UpsertFQDN: Failed to obtain a valid domain name for %s", name)
+		return 0, fmt.Errorf("InsertFQDN: Failed to obtain a valid domain name for %s", fqdn.Name)
 	}
 
-	fqdn := models.FQDN{
+	in_fqdn := models.FQDN{
 		Name: domain,
 		Tld:  tld}
 
-	fqdn_content, err := json.Marshal(fqdn)
+	fqdn_content, err := json.Marshal(in_fqdn)
 	if err != nil {
 		return 0, fmt.Errorf("Error marshalling FQDN: %v\n", err)
 	}
 
 	in_asset := models.Asset{
-		EnumExecutionID: eventID,
-		Type:            "fqdn",
-		Content:         datatypes.JSON(fqdn_content)}
+		Type:    "fqdn",
+		Content: datatypes.JSON(fqdn_content)}
 
 	result := db.Create(&in_asset)
 	if result.Error != nil {
 		return 0, fmt.Errorf("Error creating FQDN asset: %v\n", result.Error)
 	}
 
-	return in_asset.ID, nil
+	return p.insertExecutionLog(db, in_asset.ID, info.EventID)
 }
 
 // Create relation between two assets
-func (p *Postgres) upsertRelation(from_id int64, to_id int64, relation string) error {
+func (p *Postgres) insertRelation(from_id int64, to_id int64, relation string) error {
 	db, err := gorm.Open(postgres.Open(p.db.String()), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {
 		return fmt.Errorf("could not get sql connection: %s", err)
@@ -267,45 +298,47 @@ func (p *Postgres) upsertRelation(from_id int64, to_id int64, relation string) e
 }
 
 // Create relation between two FQDN assets
-func (p *Postgres) upsertFQDNRelation(ctx context.Context, fqdn string, target string, source string, eventID int64, relation string) error {
-	target_id, err := p.UpsertFQDN(ctx, target, source, eventID)
+func (p *Postgres) insertFQDNRelation(info InsertInfo, fqdn string, target string, relation string) error {
+	target_fqdn := FQDN{target}
+	target_id, err := p.InsertFQDN(info, target_fqdn)
 	if err != nil {
-		return fmt.Errorf("UpsertFQDN: Failed to upsert target FQDN %s: %v", target, err)
+		return fmt.Errorf("InsertFQDN: Failed to insert target FQDN %s: %v", target, err)
 	}
 
-	fqdn_id, err := p.UpsertFQDN(ctx, fqdn, source, eventID)
+	in_fqdn := FQDN{fqdn}
+	fqdn_id, err := p.InsertFQDN(info, in_fqdn)
 	if err != nil {
-		return fmt.Errorf("UpsertFQDN: Failed to upsert FQDN %s: %v", fqdn, err)
+		return fmt.Errorf("InsertFQDN: Failed to insert FQDN %s: %v", fqdn, err)
 	}
 
-	err = p.upsertRelation(fqdn_id, target_id, relation)
+	err = p.insertRelation(fqdn_id, target_id, relation)
 
 	return nil
 }
 
-func (p *Postgres) UpsertCNAME(ctx context.Context, fqdn string, target string, source string, eventID int64) error {
-	return p.upsertFQDNRelation(ctx, fqdn, target, source, eventID, "cname_record")
+func (p *Postgres) InsertCNAME(info InsertInfo, dns DNSRecord) error {
+	return p.insertFQDNRelation(info, dns.Fqdn, dns.Target, "cname_record")
 }
 
-func (p *Postgres) UpsertPTR(ctx context.Context, fqdn string, target string, source string, eventID int64) error {
-	return p.upsertFQDNRelation(ctx, fqdn, target, source, eventID, "ptr_record")
+func (p *Postgres) InsertPTR(info InsertInfo, dns DNSRecord) error {
+	return p.insertFQDNRelation(info, dns.Fqdn, dns.Target, "ptr_record")
 }
 
-func (p *Postgres) UpsertSRV(ctx context.Context, fqdn string, service string, target string, source string, eventID int64) error {
-	err := p.upsertFQDNRelation(ctx, service, fqdn, source, eventID, "service")
+func (p *Postgres) InsertSRV(info InsertInfo, srv Service) error {
+	err := p.insertFQDNRelation(info, srv.Service, srv.Fqdn, "service")
 	if err != nil {
 		return err
 	}
 
-	return p.upsertFQDNRelation(ctx, service, target, source, eventID, "srv_record")
+	return p.insertFQDNRelation(info, srv.Service, srv.Target, "srv_record")
 }
 
-func (p *Postgres) UpsertNS(ctx context.Context, fqdn string, target string, source string, eventID int64) error {
-	return p.upsertFQDNRelation(ctx, fqdn, target, source, eventID, "ns_record")
+func (p *Postgres) InsertNS(info InsertInfo, dns DNSRecord) error {
+	return p.insertFQDNRelation(info, dns.Fqdn, dns.Target, "ns_record")
 }
 
-func (p *Postgres) UpsertMX(ctx context.Context, fqdn string, target string, source string, eventID int64) error {
-	return p.upsertFQDNRelation(ctx, fqdn, target, source, eventID, "mx_record")
+func (p *Postgres) InsertMX(info InsertInfo, dns DNSRecord) error {
+	return p.insertFQDNRelation(info, dns.Fqdn, dns.Target, "mx_record")
 }
 
 func determineIpVersion(ip net.IP) string {
@@ -318,7 +351,7 @@ func determineIpVersion(ip net.IP) string {
 }
 
 // Create IP Address asset
-func (p *Postgres) upsertIPAddr(ctx context.Context, addr string, source string, eventID int64, version string) (int64, error) {
+func (p *Postgres) insertIPAddr(info InsertInfo, addr string, version string) (int64, error) {
 	db, err := gorm.Open(postgres.Open(p.db.String()), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {
 		return 0, fmt.Errorf("could not get sql connection: %s", err)
@@ -339,20 +372,19 @@ func (p *Postgres) upsertIPAddr(ctx context.Context, addr string, source string,
 	}
 
 	in_asset := models.Asset{
-		EnumExecutionID: eventID,
-		Type:            "ip",
-		Content:         datatypes.JSON(ip_content)}
+		Type:    "ip",
+		Content: datatypes.JSON(ip_content)}
 
 	result := db.Create(&in_asset)
 	if result.Error != nil {
 		return 0, fmt.Errorf("Error creating IP asset: %v\n", result.Error)
 	}
 
-	return in_asset.ID, nil
+	return p.insertExecutionLog(db, in_asset.ID, info.EventID)
 }
 
 // Create Netblock asset
-func (p *Postgres) upsertNetblock(ctx context.Context, cidr string, source string, eventID int64, version string) (int64, error) {
+func (p *Postgres) insertNetblock(info InsertInfo, cidr string, version string) (int64, error) {
 	db, err := gorm.Open(postgres.Open(p.db.String()), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {
 		return 0, fmt.Errorf("could not get sql connection: %s", err)
@@ -378,20 +410,19 @@ func (p *Postgres) upsertNetblock(ctx context.Context, cidr string, source strin
 	}
 
 	in_asset := models.Asset{
-		EnumExecutionID: eventID,
-		Type:            "netblock",
-		Content:         datatypes.JSON(netblock_content)}
+		Type:    "netblock",
+		Content: datatypes.JSON(netblock_content)}
 
 	result := db.Create(&in_asset)
 	if result.Error != nil {
 		return 0, fmt.Errorf("Error creating netblock asset: %v\n", result.Error)
 	}
 
-	return in_asset.ID, nil
+	return p.insertExecutionLog(db, in_asset.ID, info.EventID)
 }
 
 // Create Autonomous System asset
-func (p *Postgres) upsertAS(ctx context.Context, asn int64, source string, eventID int64) (int64, error) {
+func (p *Postgres) insertAS(info InsertInfo, asn int64) (int64, error) {
 	db, err := gorm.Open(postgres.Open(p.db.String()), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {
 		return 0, fmt.Errorf("could not get sql connection: %s", err)
@@ -406,20 +437,19 @@ func (p *Postgres) upsertAS(ctx context.Context, asn int64, source string, event
 	}
 
 	in_asset := models.Asset{
-		EnumExecutionID: eventID,
-		Type:            "as",
-		Content:         datatypes.JSON(as_content)}
+		Type:    "as",
+		Content: datatypes.JSON(as_content)}
 
 	result := db.Create(&in_asset)
 	if result.Error != nil {
 		return 0, fmt.Errorf("Error creating AS asset: %v\n", result.Error)
 	}
 
-	return in_asset.ID, nil
+	return p.insertExecutionLog(db, in_asset.ID, info.EventID)
 }
 
 // Create RIR Organization asset
-func (p *Postgres) upsertRIROrg(ctx context.Context, rir string, source string, eventID int64) (int64, error) {
+func (p *Postgres) insertRIROrg(info InsertInfo, rir string) (int64, error) {
 	db, err := gorm.Open(postgres.Open(p.db.String()), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {
 		return 0, fmt.Errorf("could not get sql connection: %s", err)
@@ -437,85 +467,157 @@ func (p *Postgres) upsertRIROrg(ctx context.Context, rir string, source string, 
 	}
 
 	in_asset := models.Asset{
-		EnumExecutionID: eventID,
-		Type:            "rirorg",
-		Content:         datatypes.JSON(riro_content)}
+		Type:    "rirorg",
+		Content: datatypes.JSON(riro_content)}
 
 	result := db.Create(&in_asset)
 	if result.Error != nil {
 		return 0, fmt.Errorf("Error creating RIROrg asset: %v\n", result.Error)
 	}
 
-	return in_asset.ID, nil
+	return p.insertExecutionLog(db, in_asset.ID, info.EventID)
 }
 
-func (p *Postgres) UpsertInfrastructure(ctx context.Context, asn int, desc string, addr string, cidr string, source string, eventID int64) error {
-	ip_id, err := p.upsertIPAddr(ctx, addr, source, eventID, "")
+func (p *Postgres) InsertInfrastructure(info InsertInfo, infra Infrastructure) error {
+	ip_id, err := p.insertIPAddr(info, infra.Address, "")
 	if err != nil {
-		return fmt.Errorf("Error upserting IP address: %v\n", err)
+		return fmt.Errorf("Error inserting IP address: %v\n", err)
 	}
 
-	netblock_id, err := p.upsertNetblock(ctx, cidr, source, eventID, "")
+	netblock_id, err := p.insertNetblock(info, infra.Cidr, "")
 	if err != nil {
-		return fmt.Errorf("Error upserting netblock: %v\n", err)
+		return fmt.Errorf("Error inserting netblock: %v\n", err)
 	}
 
-	as_id, err := p.upsertAS(ctx, int64(asn), source, eventID)
+	as_id, err := p.insertAS(info, int64(infra.Asn))
 	if err != nil {
-		return fmt.Errorf("Error upserting AS: %v\n", err)
+		return fmt.Errorf("Error inserting AS: %v\n", err)
 	}
 
-	rirorg_id, err := p.upsertRIROrg(ctx, desc, source, eventID)
+	rirorg_id, err := p.insertRIROrg(info, infra.Description)
 	if err != nil {
-		return fmt.Errorf("Error upserting RIR Org: %v\n", err)
+		return fmt.Errorf("Error inserting RIR Org: %v\n", err)
 	}
 
-	err = p.upsertRelation(netblock_id, ip_id, "contains")
+	err = p.insertRelation(netblock_id, ip_id, "contains")
 	if err != nil {
-		return fmt.Errorf("Error upserting relation: %v\n", err)
+		return fmt.Errorf("Error inserting relation: %v\n", err)
 	}
 
-	err = p.upsertRelation(as_id, netblock_id, "announces")
+	err = p.insertRelation(as_id, netblock_id, "announces")
 	if err != nil {
-		return fmt.Errorf("Error upserting relation: %v\n", err)
+		return fmt.Errorf("Error inserting relation: %v\n", err)
 	}
 
-	err = p.upsertRelation(as_id, rirorg_id, "managed_by")
+	err = p.insertRelation(as_id, rirorg_id, "managed_by")
 	if err != nil {
-		return fmt.Errorf("Error upserting relation: %v\n", err)
+		return fmt.Errorf("Error inserting relation: %v\n", err)
 	}
 
 	return nil
 }
 
-func (p *Postgres) UpsertA(ctx context.Context, fqdn string, addr string, source string, eventID int64) error {
-	fqdn_id, err := p.UpsertFQDN(ctx, fqdn, source, eventID)
+func (p *Postgres) InsertA(info InsertInfo, record HostRecord) error {
+	fqdn := FQDN{record.Fqdn}
+	fqdn_id, err := p.InsertFQDN(info, fqdn)
 	if err != nil {
-		return fmt.Errorf("Error upserting FQDN: %v\n", err)
+		return fmt.Errorf("Error inserting FQDN: %v\n", err)
 	}
 
-	ip_id, err := p.upsertIPAddr(ctx, addr, source, eventID, "v4")
+	ip_id, err := p.insertIPAddr(info, record.Address, "v4")
 	if err != nil {
-		return fmt.Errorf("Error upserting IP address: %v\n", err)
+		return fmt.Errorf("Error inserting IP address: %v\n", err)
 	}
 
-	err = p.upsertRelation(fqdn_id, ip_id, "a_record")
+	err = p.insertRelation(fqdn_id, ip_id, "a_record")
 
 	return nil
 }
 
-func (p *Postgres) UpsertAAAA(ctx context.Context, fqdn string, addr string, source string, eventID int64) error {
-	fqdn_id, err := p.UpsertFQDN(ctx, fqdn, source, eventID)
+func (p *Postgres) InsertAAAA(info InsertInfo, record HostRecord) error {
+	fqdn := FQDN{record.Fqdn}
+	fqdn_id, err := p.InsertFQDN(info, fqdn)
 	if err != nil {
-		return fmt.Errorf("Error upserting FQDN: %v\n", err)
+		return fmt.Errorf("Error inserting FQDN: %v\n", err)
 	}
 
-	ip_id, err := p.upsertIPAddr(ctx, addr, source, eventID, "v6")
+	ip_id, err := p.insertIPAddr(info, record.Address, "v6")
 	if err != nil {
-		return fmt.Errorf("Error upserting IP address: %v\n", err)
+		return fmt.Errorf("Error inserting IP address: %v\n", err)
 	}
 
-	err = p.upsertRelation(fqdn_id, ip_id, "aaaa_record")
+	err = p.insertRelation(fqdn_id, ip_id, "aaaa_record")
 
 	return nil
+}
+
+func (p *Postgres) IsCNAMENode(ctx context.Context, fqdn string) (bool, error) {
+	db, err := gorm.Open(postgres.Open(p.db.String()), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		return false, fmt.Errorf("Could not get sql connection: %s", err)
+	}
+
+	var count int64
+	err = db.
+		Model(&models.Asset{}).
+		Where("content->>'name' = ?", fqdn).
+		Joins("JOIN relations ON relations.from_asset_id = assets.id").
+		Where("relations.type = ?", "cname").
+		Count(&count).Error
+	if err != nil {
+		return false, fmt.Errorf("Could not get count of CNAME relations: %s", err)
+	}
+	if count > 0 {
+		return true, nil
+	} else {
+		return false, nil
+	}
+
+}
+
+func (p *Postgres) Migrate(ctx context.Context, graph *netmap.Graph) error {
+	return nil
+}
+
+func (p *Postgres) EventFQDNs(ctx context.Context, execID int64) []string {
+	db, err := gorm.Open(postgres.Open(p.db.String()), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		return nil
+	}
+
+	var fqdnNames []string
+	err = db.
+		Model(&models.Asset{}).
+		Select("content->>'name'").
+		Joins("JOIN execution_logs ON execution_logs.asset_id = assets.id").
+		Where("execution_logs.execution_id = ? AND assets.type = ?", execID, "fqdn").
+		Scan(&fqdnNames).Error
+
+	if err != nil {
+		return nil
+	}
+
+	return fqdnNames
+}
+
+func (p *Postgres) NamesToAddrs(ctx context.Context, execID int64, names ...string) ([]*NameAddrPair, error) {
+	db, err := gorm.Open(postgres.Open(p.db.String()), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		return nil, fmt.Errorf("Could not get sql connection: %s", err)
+	}
+
+	var results []*NameAddrPair
+	err = db.
+		Model(&models.Asset{}).
+		Select("assets.content->>'name' as name, assets_r.content->>'address' as addr").
+		Joins("JOIN relations ON relations.from_asset_id = assets.id").
+		Joins("JOIN assets as assets_r ON assets_r.id = relations.to_asset_id").
+		Where("assets.type = ? AND assets_r.type = ? AND (relations.type = ? OR relations.type = ?)", "fqdn", "ip", "a_record", "aaaa_record").
+		Scan(&results).Error
+
+	if err != nil {
+		return nil, fmt.Errorf("Could not get name-address relations: %s", err)
+	}
+
+	return results, nil
 }

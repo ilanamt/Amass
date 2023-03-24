@@ -49,6 +49,9 @@ type Config struct {
 	// A Universally Unique Identifier (UUID) for the enumeration
 	UUID uuid.UUID
 
+	// Execution ID for the enumeration
+	ExecutionID int64
+
 	// The pseudo-random number generator
 	Rand *rand.Rand
 
@@ -153,6 +156,7 @@ type Config struct {
 
 // NewConfig returns a default configuration object.
 func NewConfig() *Config {
+
 	return &Config{
 		UUID:            uuid.New(),
 		Rand:            rand.New(rand.NewSource(time.Now().UTC().UnixNano())),

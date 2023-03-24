@@ -97,8 +97,11 @@ func (r *subdomainTask) checkForSubdomains(ctx context.Context, req *requests.DN
 		return false
 	} else if times > 1 && r.withinWildcards.Has(sub) {
 		return false
-	} else if times == 1 && r.enum.graph.IsCNAMENode(ctx, sub) {
-		r.cnames.Insert(sub)
+	} else if times == 1 {
+		isCname, err := r.enum.db.IsCNAMENode(ctx, sub)
+		if err != nil && isCname {
+			r.cnames.Insert(sub)
+		}
 		return false
 	} else if times > 1 && r.cnames.Has(sub) {
 		return false

@@ -11,9 +11,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/OWASP/Amass/v3/config"
+	amassdb "github.com/OWASP/Amass/v3/db"
 	"github.com/OWASP/Amass/v3/requests"
 	"github.com/caffix/netmap"
 	"github.com/caffix/stringset"
@@ -232,7 +234,16 @@ func cumulativeOutput(uuids, domains []string, ea, la []time.Time, db *netmap.Gr
 func getScopedOutput(uuids, domains []string, db *netmap.Graph, cache *requests.ASNCache) []*requests.Output {
 	var output []*requests.Output
 
-	for _, out := range getEventOutput(context.TODO(), uuids, false, db, cache) {
+	cayleyDB := amassdb.NewCayleyGraph(db)
+	execIDs := make([]int64, len(uuids))
+
+	//TODO: make this cleaner, it is a workaround for now
+	for i, str := range uuids {
+		num, _ := strconv.ParseInt(str, 10, 64)
+		execIDs[i] = num
+	}
+
+	for _, out := range getEventOutput(context.TODO(), execIDs, false, cayleyDB, cache) {
 		if len(domains) > 0 && !domainNameInScope(out.Name, domains) {
 			continue
 		}

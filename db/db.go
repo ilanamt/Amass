@@ -15,19 +15,18 @@ import (
 
 // Database contains values required for managing databases.
 type Database struct {
-	Primary         bool          `ini:"primary"`
-	System          string        `ini:"system"`
-	URL             string        `ini:"url"`
-	Host            string        `ini:"host"`
-	Port            string        `ini:"port"`
-	Graph           *netmap.Graph `ini:"graph"`
-	Username        string        `ini:"username"`
-	Password        string        `ini:"password"`
-	DBName          string        `ini:"database"`
-	SSLMode         string        `ini:"sslmode"`
-	MigrationsPath  string        `ini:"migrations_path"`
-	MigrationsTable string        `ini:"migrations_table"`
-	Options         string        `ini:"options"`
+	Primary         bool   `ini:"primary"`
+	System          string `ini:"system"`
+	URL             string `ini:"url"`
+	Host            string `ini:"host"`
+	Port            string `ini:"port"`
+	Username        string `ini:"username"`
+	Password        string `ini:"password"`
+	DBName          string `ini:"database"`
+	SSLMode         string `ini:"sslmode"`
+	MigrationsPath  string `ini:"migrations_path"`
+	MigrationsTable string `ini:"migrations_table"`
+	Options         string `ini:"options"`
 }
 
 func (d Database) String() string {
@@ -41,7 +40,7 @@ func (d Database) String() string {
 	return s
 }
 
-type SQLStore interface {
+type Store interface {
 	getAppliedMigrationsCount() (int, error)
 	getMigrationsSource() *migrate.FileMigrationSource
 	getSqlConnection() (*sql.DB, error)
@@ -51,18 +50,58 @@ type SQLStore interface {
 	IsDatabaseCreated() (bool, error)
 	RunInitMigration() error
 	RunMigrations() error
+	InsertFQDN(InsertInfo, FQDN) (int64, error)
+	InsertCNAME(InsertInfo, DNSRecord) error
+	InsertPTR(InsertInfo, DNSRecord) error
+	InsertSRV(InsertInfo, Service) error
+	InsertNS(InsertInfo, DNSRecord) error
+	InsertMX(InsertInfo, DNSRecord) error
+	InsertInfrastructure(InsertInfo, Infrastructure) error
+	InsertA(InsertInfo, HostRecord) error
+	InsertAAAA(InsertInfo, HostRecord) error
+	IsCNAMENode(context.Context, string) (bool, error)
+	InsertExecution([]string) (int64, error)
+	Migrate(context.Context, *netmap.Graph) error
+	EventFQDNs(context.Context, int64) []string
+	NamesToAddrs(context.Context, int64, ...string) ([]*NameAddrPair, error)
 }
 
-type Store interface {
-	UpsertFQDN(context.Context, string, string, int64) (int64, error)
-	UpsertCNAME(context.Context, string, string, string, int64) error
-	UpsertPTR(context.Context, string, string, string, int64) error
-	UpsertSRV(context.Context, string, string, string, string, int64) error
-	UpsertNS(context.Context, string, string, string, int64) error
-	UpsertMX(context.Context, string, string, string, int64) error
-	UpsertInfrastructure(context.Context, int, string, string, string, string, int64) error
-	UpsertA(context.Context, string, string, string, int64) error
-	UpsertAAAA(context.Context, string, string, string, int64) error
+type InsertInfo struct {
+	Ctx     context.Context
+	Source  string
+	EventID int64
+}
+
+type FQDN struct {
+	Name string
+}
+
+type DNSRecord struct {
+	Fqdn   string
+	Target string
+}
+
+type HostRecord struct {
+	Fqdn    string
+	Address string
+}
+
+type Service struct {
+	Fqdn    string
+	Target  string
+	Service string
+}
+
+type Infrastructure struct {
+	Asn         int
+	Description string
+	Address     string
+	Cidr        string
+}
+
+type NameAddrPair struct {
+	Name string
+	Addr string
 }
 
 func GetDatabaseManager(db *Database) Store {
@@ -75,8 +114,8 @@ func GetDatabaseManager(db *Database) Store {
 		}
 		return mgr
 	case "cayley":
-		if mgr == nil || mgr.(*Cayley).db != db || mgr.(*Cayley).graph != db.Graph {
-			mgr = &Cayley{db: db, graph: db.Graph}
+		if mgr == nil || mgr.(*Cayley).db != db {
+			mgr = NewCayley(db)
 		}
 		return mgr
 	default:

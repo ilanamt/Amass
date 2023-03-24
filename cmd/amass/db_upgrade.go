@@ -18,7 +18,7 @@ func runDBUpgradeSubCommand(cfg *config.Config) {
 		r.Fprintf(color.Error, "Failed to open database: %v\n", err)
 		os.Exit(1)
 	}
-	manager := amassdb.GetDatabaseManager(database).(amassdb.SQLStore)
+	manager := amassdb.GetDatabaseManager(database).(amassdb.Store)
 
 	if err := manager.RunMigrations(); err != nil {
 		r.Fprintf(color.Error, "Failed to run pending migrations: %v\n", err)

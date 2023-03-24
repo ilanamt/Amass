@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	amassdb "github.com/OWASP/Amass/v3/db"
 	amassnet "github.com/OWASP/Amass/v3/net"
 	"github.com/OWASP/Amass/v3/net/dns"
 	"github.com/OWASP/Amass/v3/requests"
@@ -364,7 +365,7 @@ func (r *enumSource) processDupNames() {
 	countdown := r.max * 2
 	var inc uint32 = uint32(r.max) * 2
 	var highest uint32 = (1 << 32) - 1
-	uuid := r.enum.Config.UUID.String()
+	execId := r.enum.Config.ExecutionID
 
 	type altsource struct {
 		Name      string
@@ -378,9 +379,9 @@ func (r *enumSource) processDupNames() {
 	each := func(element interface{}) {
 		req := element.(*requests.DNSRequest)
 
-		if r.addSourceToEntry(uuid, req.Name, req.Source) {
+		/* if r.addSourceToEntry(execId, req.Name, req.Source) {
 			return
-		}
+		} */
 		if req.Tag != requests.BRUTE && req.Tag != requests.ALT {
 			min := r.getCount()
 			if highest-min < inc {
@@ -415,7 +416,7 @@ loop:
 					a.Countdown--
 				}
 				if a.Countdown <= 0 {
-					go func() { _ = r.addSourceToEntry(uuid, a.Name, a.Source) }()
+					go func() { _ = r.addSourceToEntry(execId, a.Name, a.Source) }()
 					// Remove the element
 					removed++
 					pending[i] = pending[len(pending)-removed]
@@ -429,14 +430,22 @@ loop:
 	// Last attempt to update the sources information
 	r.dups.Process(each)
 	for _, a := range pending {
-		_ = r.addSourceToEntry(uuid, a.Name, a.Source)
+		_ = r.addSourceToEntry(execId, a.Name, a.Source)
 	}
 }
 
-func (r *enumSource) addSourceToEntry(uuid, name, source string) bool {
-	if _, err := r.enum.graph.ReadNode(r.enum.ctx, name, "fqdn"); err == nil {
-		_, _ = r.enum.graph.UpsertFQDN(r.enum.ctx, name, source, uuid)
-		return true
+func (r *enumSource) addSourceToEntry(execId int64, name, source string) bool {
+	//if _, err := r.enum.graph.ReadNode(r.enum.ctx, name, "fqdn"); err == nil {
+	info := amassdb.InsertInfo{
+		Ctx:     r.enum.ctx,
+		Source:  source,
+		EventID: execId,
 	}
-	return false
+	fqdn := amassdb.FQDN{
+		Name: name,
+	}
+	_, err := r.enum.db.InsertFQDN(info, fqdn)
+
+	return err == nil
+	//}
 }

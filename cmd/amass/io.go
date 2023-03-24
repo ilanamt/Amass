@@ -10,6 +10,7 @@ import (
 	"net"
 	"time"
 
+	amassdb "github.com/OWASP/Amass/v3/db"
 	"github.com/OWASP/Amass/v3/enum"
 	"github.com/OWASP/Amass/v3/requests"
 	"github.com/caffix/netmap"
@@ -25,31 +26,31 @@ func init() {
 }
 
 // ExtractOutput is a convenience method for obtaining new discoveries made by the enumeration process.
-func ExtractOutput(ctx context.Context, g *netmap.Graph, e *enum.Enumeration, filter *stringset.Set, asinfo bool, limit int) []*requests.Output {
+func ExtractOutput(ctx context.Context, db amassdb.Store, e *enum.Enumeration, filter *stringset.Set, asinfo bool, limit int) []*requests.Output {
 	if e.Config.Passive {
-		return EventNames(ctx, g, e.Config.UUID.String(), filter)
+		return EventNames(ctx, db, e.Config.ExecutionID, filter)
 	}
-	return EventOutput(ctx, g, e.Config.UUID.String(), filter, asinfo, e.Sys.Cache(), limit)
+	return EventOutput(ctx, db, e.Config.ExecutionID, filter, asinfo, e.Sys.Cache(), limit)
 }
 
 type outLookup map[string]*requests.Output
 
 // EventOutput returns findings within the receiver Graph for the event identified by the uuid string
 // parameter and not already in the filter argument. The filter is updated by EventOutput.
-func EventOutput(ctx context.Context, g *netmap.Graph, uuid string, f *stringset.Set, asninfo bool, cache *requests.ASNCache, limit int) []*requests.Output {
+func EventOutput(ctx context.Context, db amassdb.Store, execID int64, f *stringset.Set, asninfo bool, cache *requests.ASNCache, limit int) []*requests.Output {
 	// Make sure a filter has been created
 	if f == nil {
 		f = stringset.New()
 		defer f.Close()
 	}
 
-	names := randomSelection(g.EventFQDNs(ctx, uuid), f, limit)
+	names := randomSelection(db.EventFQDNs(ctx, execID), f, limit)
 	lookup := make(outLookup, len(names))
-	for _, o := range buildNameInfo(ctx, g, uuid, names) {
+	for _, o := range buildNameInfo(ctx, db, execID, names) {
 		lookup[o.Name] = o
 	}
 	// Build the lookup map used to create the final result set
-	if pairs, err := g.NamesToAddrs(ctx, uuid, names...); err == nil {
+	if pairs, err := db.NamesToAddrs(ctx, execID, names...); err == nil {
 		for _, p := range pairs {
 			if p.Name == "" || p.Addr == "" {
 				continue
@@ -128,7 +129,7 @@ func addInfrastructureInfo(lookup outLookup, filter *stringset.Set, cache *reque
 
 // EventNames returns findings within the receiver Graph for the event identified by the uuid string
 // parameter and not already in the filter argument. The filter is updated by EventNames.
-func EventNames(ctx context.Context, g *netmap.Graph, uuid string, f *stringset.Set) []*requests.Output {
+func EventNames(ctx context.Context, db amassdb.Store, execID int64, f *stringset.Set) []*requests.Output {
 	// Make sure a filter has been created
 	if f == nil {
 		f = stringset.New()
@@ -136,14 +137,14 @@ func EventNames(ctx context.Context, g *netmap.Graph, uuid string, f *stringset.
 	}
 
 	var names []string
-	for _, name := range g.EventFQDNs(ctx, uuid) {
+	for _, name := range db.EventFQDNs(ctx, execID) {
 		if !f.Has(name) {
 			names = append(names, name)
 		}
 	}
 
 	var results []*requests.Output
-	for _, o := range buildNameInfo(ctx, g, uuid, names) {
+	for _, o := range buildNameInfo(ctx, db, execID, names) {
 		if !f.Has(o.Name) {
 			results = append(results, o)
 			f.Insert(o.Name)
@@ -152,7 +153,7 @@ func EventNames(ctx context.Context, g *netmap.Graph, uuid string, f *stringset.
 	return results
 }
 
-func buildNameInfo(ctx context.Context, g *netmap.Graph, uuid string, names []string) []*requests.Output {
+func buildNameInfo(ctx context.Context, db amassdb.Store, execID int64, names []string) []*requests.Output {
 	results := make(map[string]*requests.Output, len(names))
 
 	for _, name := range names {
@@ -161,7 +162,7 @@ func buildNameInfo(ctx context.Context, g *netmap.Graph, uuid string, names []st
 		}
 
 		n := netmap.Node(name)
-		if srcs, err := g.NodeSources(ctx, n, uuid); err == nil && len(srcs) > 0 {
+		if srcs, err := db.(*amassdb.Cayley).NodeSources(ctx, n, string(execID)); err == nil && len(srcs) > 0 {
 			results[name] = &requests.Output{
 				Name:    name,
 				Sources: srcs,

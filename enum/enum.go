@@ -9,6 +9,7 @@ import (
 
 	"github.com/OWASP/Amass/v3/config"
 	"github.com/OWASP/Amass/v3/datasrcs"
+	amassdb "github.com/OWASP/Amass/v3/db"
 	"github.com/OWASP/Amass/v3/requests"
 	"github.com/OWASP/Amass/v3/systems"
 	"github.com/caffix/netmap"
@@ -22,7 +23,7 @@ type Enumeration struct {
 	Config   *config.Config
 	Sys      systems.System
 	ctx      context.Context
-	graph    *netmap.Graph
+	db       amassdb.Store
 	srcs     []service.Service
 	done     chan struct{}
 	nameSrc  *enumSource
@@ -34,11 +35,18 @@ type Enumeration struct {
 }
 
 // NewEnumeration returns an initialized Enumeration that has not been started yet.
-func NewEnumeration(cfg *config.Config, sys systems.System, graph *netmap.Graph) *Enumeration {
+func NewEnumeration(cfg *config.Config, sys systems.System, db amassdb.Store) *Enumeration {
+	execID, err := db.InsertExecution(cfg.Domains())
+	if err != nil {
+		return nil
+	}
+
+	cfg.ExecutionID = execID
+
 	return &Enumeration{
 		Config:   cfg,
 		Sys:      sys,
-		graph:    graph,
+		db:       db,
 		srcs:     datasrcs.SelectedDataSources(cfg, sys.DataSources()),
 		requests: queue.NewQueue(),
 	}
@@ -195,7 +203,15 @@ func (e *Enumeration) makeOutputSink() pipeline.SinkFunc {
 
 		req, ok := data.(*requests.DNSRequest)
 		if ok && req != nil && req.Name != "" && e.Config.IsDomainInScope(req.Name) {
-			if _, err := e.graph.UpsertFQDN(e.ctx, req.Name, req.Source, e.Config.UUID.String()); err != nil {
+			info := amassdb.InsertInfo{
+				Ctx:     e.ctx,
+				Source:  req.Source,
+				EventID: e.Config.ExecutionID,
+			}
+			fqdn := amassdb.FQDN{
+				Name: req.Name,
+			}
+			if _, err := e.db.InsertFQDN(info, fqdn); err != nil {
 				e.Config.Log.Print(err.Error())
 			}
 		}

@@ -18,7 +18,7 @@ func runDBDropCommand(cfg *config.Config) {
 		r.Fprintf(color.Error, "Failed to open database: %v\n", err)
 		os.Exit(1)
 	}
-	manager := amassdb.GetDatabaseManager(database).(amassdb.SQLStore)
+	manager := amassdb.GetDatabaseManager(database).(amassdb.Store)
 
 	if err := manager.DropDatabase(); err != nil {
 		r.Fprintf(color.Error, "Failed to drop database: %v\n", err)

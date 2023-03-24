@@ -319,13 +319,13 @@ func orderedEvents(ctx context.Context, events []string, db *netmap.Graph) ([]st
 	return events, earliest, latest
 }
 
-func getEventOutput(ctx context.Context, uuids []string, asninfo bool, db *netmap.Graph, cache *requests.ASNCache) []*requests.Output {
+func getEventOutput(ctx context.Context, execIDs []int64, asninfo bool, db amassdb.Store, cache *requests.ASNCache) []*requests.Output {
 	filter := stringset.New()
 	defer filter.Close()
 
 	var output []*requests.Output
-	for i := len(uuids) - 1; i >= 0; i-- {
-		output = append(output, EventOutput(ctx, db, uuids[i], filter, asninfo, cache, 0)...)
+	for i := len(execIDs) - 1; i >= 0; i-- {
+		output = append(output, EventOutput(ctx, db, execIDs[i], filter, asninfo, cache, 0)...)
 	}
 	return output
 }

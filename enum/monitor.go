@@ -12,6 +12,7 @@ import (
 
 const falsePositiveThreshold int = 100
 
+// TODO change to postgres
 func (e *Enumeration) checkForMissedWildcards(ip string) {
 	addr := netmap.Node(ip)
 
